@@ -23,35 +23,36 @@ credential metadata — remains in the plugin.
 
 ### Pre-Authorized Code Flow with External AS
 
-```
-Controller          Plugin (ACA-Py)          AS (Keycloak)          Wallet
-    |                     |                       |                     |
-    |-- POST /exchange --> |                       |                     |
-    |   /credential-offer |                       |                     |
-    |                     |-- ROPC /token -------> |                     |
-    |                     |<-- user access token --|                     |
-    |                     |-- GET /create-         |                     |
-    |                     |   credential-offer --> |                     |
-    |                     |<-- { nonce: JWT } -----|                     |
-    |<-- offer URI ------  |                       |                     |
-    |                     |                       |                     |
-    |       (QR code displayed to user)            |                     |
-    |                     |                       |                     |
-    |                     |  <-- GET /.well-known/openid-credential-issuer
-    |                     |-- metadata (authorization_servers: [AS]) --> |
-    |                     |                       |                     |
-    |                     |  <-- AS /.well-known/openid-configuration ---|
-    |                     |                       |-- AS metadata -----> |
-    |                     |                       |                     |
-    |                     |                       |<-- POST /token ---   |
-    |                     |                       |   (pre-auth code)    |
-    |                     |                       |-- DPoP access_token->|
-    |                     |                       |                     |
-    |                     |<-- POST /credential (DPoP token) -----------|
-    |                     |-- validate token via Keycloak JWKS           |
-    |                     |-- validate DPoP proof (RFC 9449)             |
-    |                     |-- verify proof of possession                 |
-    |                     |-- issue credential -------------------------->|
+```mermaid
+sequenceDiagram
+    actor Controller
+    participant Plugin as Plugin (ACA-Py)
+    participant AS as AS (Keycloak)
+    actor Wallet
+
+    Controller->>Plugin: POST /exchange/credential-offer
+    Plugin->>AS: POST /token (ROPC, credential scope)
+    AS-->>Plugin: user access token
+    Plugin->>AS: GET /create-credential-offer?pre_authorized=true
+    AS-->>Plugin: { nonce: JWT (pre-auth code) }
+    Plugin-->>Controller: credential offer URI
+
+    Note over Controller,Wallet: QR code displayed to user
+
+    Wallet->>Plugin: GET /.well-known/openid-credential-issuer
+    Plugin-->>Wallet: metadata (authorization_servers: [AS public URL])
+
+    Wallet->>AS: GET /.well-known/openid-configuration
+    AS-->>Wallet: AS metadata (token_endpoint, jwks_uri, …)
+
+    Wallet->>AS: POST /token (pre-auth code)
+    AS-->>Wallet: DPoP-bound access token
+
+    Wallet->>Plugin: POST /credential (Authorization: DPoP <token>, DPoP: <proof>)
+    Plugin->>AS: GET /certs (fetch JWKS)
+    AS-->>Plugin: JWKS
+    Note over Plugin: Verify token signature & expiry<br/>Validate DPoP proof (RFC 9449)<br/>Verify proof of possession
+    Plugin-->>Wallet: credential response
 ```
 
 ### Plugin Endpoints Affected
