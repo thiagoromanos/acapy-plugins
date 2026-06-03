@@ -581,7 +581,7 @@ async function issue_sdjwt_credential(req, res) {
 
   if (!isRefresh) {
     // Get Credential Offer information
-    const credentialOfferUrl = `${API_BASE_URL}/oid4vci/credential-offer`;
+    const credentialOfferUrl = `${API_BASE_URL}/oid4vci/credential-offer-by-ref`;
     const queryParams = {
       user_pin_required: false,
       exchange_id: exchangeId,
@@ -757,7 +757,7 @@ async function issue_mdoc_credential(req, res) {
 
 
   // Get credential offer and emit QR code as in other flows
-  const credentialOfferUrl = `${API_BASE_URL}/oid4vci/credential-offer`;
+  const credentialOfferUrl = `${API_BASE_URL}/oid4vci/credential-offer-by-ref`;
   const queryParams = {
     exchange_id: exchangeId,
     user_pin_required: false,
