@@ -31,6 +31,7 @@ from ..config.config import (
     add_scid_mapping,
     did_from_scid,
     get_plugin_config,
+    get_server_url,
     get_server_domain,
     get_witnesses,
     is_controller,
@@ -84,10 +85,21 @@ class ControllerManager:
         self.watcher_client = WebVHWatcherClient(self.profile)
 
     async def _get_active_witness_connection(self) -> Optional[ConnRecord]:
-        # Delegate to the (bounded) lookup shared with WitnessManager, which
-        # derives the same alias and caches the connection id to avoid
-        # repeated connections-table scans.
-        return await self.witness._get_active_witness_connection()
+        server_url = await get_server_url(self.profile)
+        witness_alias = create_alias(url_to_domain(server_url), "witnessConnection")
+        async with self.profile.session() as session:
+            connection_records = await ConnRecord.retrieve_by_alias(
+                session, witness_alias
+            )
+
+        active_connections = [
+            conn for conn in connection_records if conn.state == "active"
+        ]
+
+        if len(active_connections) > 0:
+            return active_connections[0]
+
+        return None
 
     async def _sign_log_entry(self, log_entry):
         did = log_entry.get("state", {}).get("id", None)
@@ -426,7 +438,6 @@ class ControllerManager:
         config["scids"] = config.get("scids", {})
         config["witnesses"] = config.get("witnesses", [])
         config["witness"] = options.get("witness", False)
-        config["auto_setup"] = options.get("auto_setup", config.get("auto_setup", True))
         config["endorsement"] = options.get("endorsement", False)
         config["auto_attest"] = options.get("auto_attest", False)
         config["server_url"] = options.get("server_url", config.get("server_url")).rstrip(
@@ -829,27 +840,20 @@ class ControllerManager:
 
     async def auto_witness_setup(self) -> None:
         """Automatically set up the witness the connection."""
-        if not await is_controller(self.profile):
-            return
-
-        config = await get_plugin_config(self.profile)
-        if not config.get("auto_setup", True):
-            # A controller that never intends to create/update did:webvh DIDs
-            # (e.g. a verifier-only agent) doesn't need a witness connection
-            # at all. Set `auto_setup: false` in the plugin config to opt out
-            # of the witness connection lookup/creation entirely.
-            LOGGER.info("Automatic witness connection setup is disabled.")
-            return
-
         domain = await get_server_domain(self.profile)
         witness_alias = create_alias(domain, "witnessConnection")
+
+        if not await is_controller(self.profile):
+            return
 
         # Get the witness connection is already set up
         if await self._get_active_witness_connection():
             LOGGER.info("Connected to witness from previous connection.")
             return
 
-        witness_invitation = config.get("witness_invitation")
+        witness_invitation = (await get_plugin_config(self.profile)).get(
+            "witness_invitation"
+        )
         if not witness_invitation:
             LOGGER.info("No witness invitation, can't create connection automatically.")
             return

@@ -1,18 +1,29 @@
 """AccessToken repository."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Union
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from tenant.models import AccessToken
-from tenant.repositories.base import BaseTokenRepository
 
 
-class AccessTokenRepository(BaseTokenRepository):
+class AccessTokenRepository:
     """Repository for access tokens."""
 
-    _model = AccessToken
+    def __init__(self, db: AsyncSession):
+        """Constructor."""
+        self.db = db
+
+    @staticmethod
+    def _to_dt(value: Union[int, float, datetime]) -> datetime:
+        """Normalize epoch seconds or datetime to UTC datetime."""
+        if isinstance(value, datetime):
+            return (
+                value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+            )
+        return datetime.fromtimestamp(float(value), tz=timezone.utc)
 
     async def create(
         self,
@@ -21,7 +32,6 @@ class AccessTokenRepository(BaseTokenRepository):
         issued_at: Union[int, float, datetime],
         expires_at: Union[int, float, datetime],
         token_metadata: dict | None = None,
-        cnf_jkt: str | None = None,
     ) -> AccessToken:
         """Create and add a new access token."""
         issued_dt = self._to_dt(issued_at)
@@ -32,7 +42,6 @@ class AccessTokenRepository(BaseTokenRepository):
             issued_at=issued_dt,
             expires_at=expires_dt,
             token_metadata=token_metadata or {},
-            cnf_jkt=cnf_jkt,
         )
         self.db.add(access_token)
         await self.db.flush()

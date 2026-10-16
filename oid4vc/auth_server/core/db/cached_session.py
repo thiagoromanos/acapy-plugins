@@ -1,67 +1,37 @@
-"""LRU-cached async engine pool, keyed by (url, schema)."""
+"""Cached session factory."""
 
-import asyncio
-from collections import OrderedDict
 from contextlib import asynccontextmanager
+from functools import lru_cache
 from typing import AsyncIterator
 
-from sqlalchemy.ext.asyncio import (
-    AsyncEngine,
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
-
-_engines: OrderedDict[tuple[str, str], AsyncEngine] = OrderedDict()
-_DEFAULT_MAX = 64
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 
-def _session_factory(
-    async_url: str,
-    schema: str,
-    *,
-    max_engines: int = _DEFAULT_MAX,
-    pool_size: int = 5,
-    max_overflow: int = 10,
-    pool_recycle: int = 1800,
-) -> async_sessionmaker[AsyncSession]:
-    """Get or create a sessionmaker, evicting LRU engines over max."""
-    key = (async_url, schema)
-    if key in _engines:
-        _engines.move_to_end(key)
-    else:
-        _engines[key] = create_async_engine(
-            async_url,
-            pool_pre_ping=True,
-            pool_size=pool_size,
-            max_overflow=max_overflow,
-            pool_recycle=pool_recycle,
-            connect_args={"server_settings": {"search_path": schema}},
-        )
-        while len(_engines) > max_engines:
-            _, evicted = _engines.popitem(last=False)
-            try:
-                asyncio.get_event_loop().create_task(evicted.dispose())
-            except RuntimeError:
-                pass
-    return async_sessionmaker(_engines[key], expire_on_commit=False)
+@lru_cache(maxsize=256)
+def _session_factory(async_url: str, schema: str) -> async_sessionmaker[AsyncSession]:
+    """Return a cached sessionmaker for the given database and schema."""
+    engine = create_async_engine(
+        async_url,
+        pool_pre_ping=True,
+        connect_args={"server_settings": {"search_path": schema}},
+    )
+    return async_sessionmaker(engine, expire_on_commit=False)
 
 
 @asynccontextmanager
 async def cached_session(async_url: str, schema: str) -> AsyncIterator[AsyncSession]:
-    """Context manager for a session from the cached pool."""
+    """Yield an AsyncSession backed by a cached factory."""
     session = _session_factory(async_url, schema)()
     try:
         yield session
-    except Exception:
-        await session.rollback()
-        raise
     finally:
         await session.close()
 
 
 async def dispose_cached_engines() -> None:
-    """Shut down all pooled engines."""
-    for engine in _engines.values():
-        await engine.dispose()
-    _engines.clear()
+    """Dispose all cached engines."""
+    factories = list(_session_factory.cache_info().cache.keys())  # type: ignore[attr-defined]
+    for args in factories:
+        sessionmaker = _session_factory(*args)
+        await sessionmaker.bind.dispose()  # type: ignore[union-attr]
+    _session_factory.cache_clear()

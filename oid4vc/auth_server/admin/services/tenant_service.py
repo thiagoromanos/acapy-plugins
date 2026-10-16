@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import asyncio
 import secrets
 import uuid
 from datetime import datetime, timezone
 
 import psycopg
-from joserfc import jwk
+from authlib.jose import JsonWebKey
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ec, ed25519
+from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi import HTTPException
 from psycopg import sql
 from sqlalchemy.exc import IntegrityError
@@ -27,18 +26,14 @@ from admin.services.client_service import ClientService
 from admin.utils.crypto import encrypt_db_password, encrypt_private_pem
 from admin.utils.db_utils import build_sync_url, resolve_tenant_urls, url_to_dsn
 from core.db.cached_session import cached_session
-from core.consts import SUPPORTED_SIGNING_ALGS, ALG_KEY_FAMILY
 from core.models import Client
-from core.utils.logging import get_logger
-
-logger = get_logger(__name__)
 
 
 class TenantService:
     """Tenant orchestration."""
 
     def __init__(self, session: AsyncSession):
-        """Bind to session."""
+        """Constructor."""
         self.session = session
         self.repo = TenantRepository(session)
 
@@ -108,18 +103,15 @@ class TenantService:
         db_password = secrets.token_urlsafe(32)
 
         try:
-            await asyncio.to_thread(
-                lambda: self._provision(
-                    db_name=db_name,
-                    db_schema=db_schema,
-                    db_user=db_user,
-                    db_password=db_password,
-                )
+            self._provision(
+                db_name=db_name,
+                db_schema=db_schema,
+                db_user=db_user,
+                db_password=db_password,
             )
         except Exception as ex:
             await self.session.rollback()
-            logger.exception("Tenant provision failed: %s", ex)
-            raise HTTPException(status_code=500, detail="provision_failed")
+            raise HTTPException(status_code=500, detail=f"provision_failed: {ex}")
 
         # Run Alembic migrations via shared service
         alembic_url = build_sync_url(db_name, db_user, db_password)
@@ -132,8 +124,7 @@ class TenantService:
             )
         except Exception as ex:
             await self.session.rollback()
-            logger.exception("Tenant migration failed: %s", ex)
-            raise HTTPException(status_code=500, detail="migration_failed")
+            raise HTTPException(status_code=500, detail=f"migration_failed: {ex}")
 
         tenant.db_name = db_name
         tenant.db_schema = db_schema
@@ -175,24 +166,16 @@ class TenantService:
         return deleted
 
     async def generate_keypair(self, uid: str, body) -> dict:
-        """Generate and store a tenant signing keypair."""
-
+        """Generate and store a tenant signing keypair (ES256)."""
         repo = self.repo
         tenant = await repo.get_by_uid(uid)
         if not tenant:
             raise HTTPException(status_code=404, detail="tenant_not_found")
 
-        if body.alg not in SUPPORTED_SIGNING_ALGS:
+        if body.alg != "ES256":
             raise HTTPException(status_code=400, detail="unsupported_alg")
 
-        # Generate private key based on algorithm
-        if body.alg == "EdDSA":
-            prv = ed25519.Ed25519PrivateKey.generate()
-        elif body.alg == "ES384":
-            prv = ec.generate_private_key(ec.SECP384R1())
-        else:  # ES256
-            prv = ec.generate_private_key(ec.SECP256R1())
-
+        prv = ec.generate_private_key(ec.SECP256R1())
         private_pem = prv.private_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PrivateFormat.PKCS8,
@@ -200,8 +183,12 @@ class TenantService:
         ).decode("utf-8")
         private_pem_enc = encrypt_private_pem(private_pem)
 
-        key_family = ALG_KEY_FAMILY[body.alg]
-        public_jwk = jwk.import_key(private_pem, key_family).as_dict(private=False)  # type: ignore
+        pub = prv.public_key()
+        public_pem = pub.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("utf-8")
+        public_jwk = JsonWebKey.import_key(public_pem).as_dict()  # type: ignore
         if public_jwk is None:
             raise HTTPException(status_code=500, detail="Failed to create JWK from PEM")
 
@@ -259,43 +246,72 @@ class TenantService:
         await self.session.commit()
         return {"status": new_status, "kid": kid, "uid": uid}
 
-    async def _with_client_service(self, uid: str, op: str, callback):
-        """Resolve tenant, open a session, run callback(ClientService)."""
+    async def create_client(self, uid: str, data: ClientIn) -> Client:
+        """Create a client record in the tenant DB."""
         tenant = await self.repo.get_by_uid(uid)
         if not tenant:
             raise HTTPException(status_code=404, detail="tenant_not_found")
+
         async_url, _, schema = resolve_tenant_urls(tenant)
         try:
             async with cached_session(async_url, schema) as tenant_db:
-                return await callback(ClientService(tenant_db))
-        except HTTPException:
-            raise
+                svc = ClientService(tenant_db)
+                return await svc.create(data)
         except Exception as ex:
-            logger.exception("Client %s failed for tenant %s: %s", op, uid, ex)
-            raise HTTPException(status_code=500, detail="onboard_failed")
-
-    async def create_client(self, uid: str, data: ClientIn) -> Client:
-        """Create a client record in the tenant DB."""
-        return await self._with_client_service(
-            uid, "create", lambda svc: svc.create(data)
-        )
+            raise HTTPException(status_code=500, detail=f"onboard_failed: {ex}")
 
     async def list_clients(self, uid: str) -> list[Client]:
         """List all clients."""
-        return await self._with_client_service(uid, "list", lambda svc: svc.list())
+        tenant = await self.repo.get_by_uid(uid)
+        if not tenant:
+            raise HTTPException(status_code=404, detail="tenant_not_found")
+
+        async_url, _, schema = resolve_tenant_urls(tenant)
+        try:
+            async with cached_session(async_url, schema) as tenant_db:
+                svc = ClientService(tenant_db)
+                return await svc.list()
+        except Exception as ex:
+            raise HTTPException(status_code=500, detail=f"onboard_failed: {ex}")
 
     async def get_client(self, uid: str, client_id: str) -> Client | None:
         """Get a specific client."""
-        return await self._with_client_service(uid, "get", lambda svc: svc.get(client_id))
+        tenant = await self.repo.get_by_uid(uid)
+        if not tenant:
+            raise HTTPException(status_code=404, detail="tenant_not_found")
+
+        async_url, _, schema = resolve_tenant_urls(tenant)
+        try:
+            async with cached_session(async_url, schema) as tenant_db:
+                svc = ClientService(tenant_db)
+                return await svc.get(client_id)
+        except Exception as ex:
+            raise HTTPException(status_code=500, detail=f"onboard_failed: {ex}")
 
     async def update_client(self, uid: str, client_id: str, data: ClientIn) -> int:
         """Update a client."""
-        return await self._with_client_service(
-            uid, "update", lambda svc: svc.update(client_id, data)
-        )
+        tenant = await self.repo.get_by_uid(uid)
+        if not tenant:
+            raise HTTPException(status_code=404, detail="tenant_not_found")
+
+        async_url, _, schema = resolve_tenant_urls(tenant)
+        try:
+            async with cached_session(async_url, schema) as tenant_db:
+                svc = ClientService(tenant_db)
+                return await svc.update(client_id, data)
+        except Exception as ex:
+            raise HTTPException(status_code=500, detail=f"onboard_failed: {ex}")
 
     async def delete_client(self, uid: str, client_id: str) -> int:
         """Delete a client."""
-        return await self._with_client_service(
-            uid, "delete", lambda svc: svc.delete(client_id)
-        )
+        tenant = await self.repo.get_by_uid(uid)
+        if not tenant:
+            raise HTTPException(status_code=404, detail="tenant_not_found")
+
+        async_url, _, schema = resolve_tenant_urls(tenant)
+        try:
+            async with cached_session(async_url, schema) as tenant_db:
+                svc = ClientService(tenant_db)
+                return await svc.delete(client_id)
+        except Exception as ex:
+            raise HTTPException(status_code=500, detail=f"onboard_failed: {ex}")

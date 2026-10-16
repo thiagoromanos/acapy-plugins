@@ -10,7 +10,7 @@ python = "^3.13"
 orjson = "^3.11.6"
 fastapi = "^0.116"
 uvicorn = { extras = ["standard"], version = ">=0.35,<0.52" }
-authlib = "^1.7.2"
+authlib = "^1.6"
 SQLAlchemy = { version = "^2.0", extras = ["asyncio"] }
 asyncpg = "^0.30"
 psycopg = { extras = ["binary"], version = "^3.2.9" }
@@ -26,12 +26,11 @@ pytest = ">=8.3,<10.0"
 pytest-asyncio = "^1.1"
 pytest-cov = "^6.0"
 coverage = "^7.6"
-ruff = ">=0.16.10,<0.18.0"
-ipykernel = "^6.29"
+ruff = ">=0.16.6,<0.17.0"
 
 [tool.ruff]
 line-length = 90
-extend-exclude = ["alembic/**/versions/*", "**/*.ipynb"]
+extend-exclude = ["alembic/**/versions/*"]
 
 [tool.ruff.format]
 quote-style = "double"

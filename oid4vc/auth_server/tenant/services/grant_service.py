@@ -15,7 +15,7 @@ from tenant.repositories.subject_repository import SubjectRepository
 
 
 def new_code() -> str:
-    """Random pre-auth code."""
+    """Generate a new code."""
     return secrets.token_urlsafe(settings.TOKEN_BYTES)
 
 
@@ -38,7 +38,6 @@ async def ensure_subject(
         return subj.id
     except IntegrityError:
         # Race: subject with this uid created concurrently
-        await db.rollback()
         sid2 = await repo.get_id_by_uid(uid)
         if sid2 is None:
             raise
@@ -60,8 +59,7 @@ async def create_pre_authorized_code(
     else:
         authorization_details_dict = None
     now = utcnow()
-    max_ttl = settings.PRE_AUTH_CODE_TTL
-    ttl = min(ttl_seconds, max_ttl) if ttl_seconds and ttl_seconds > 0 else max_ttl
+    ttl = ttl_seconds if ttl_seconds and ttl_seconds > 0 else settings.PRE_AUTH_CODE_TTL
     repo = GrantRepository(db)
     pac = await repo.create_pre_auth_code(
         subject_id=sid,

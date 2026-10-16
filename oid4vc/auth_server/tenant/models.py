@@ -34,13 +34,16 @@ class Subject(Base):
         TIMESTAMP(timezone=True), nullable=True, onupdate=func.now()
     )
     pre_auth_codes: Mapped[list["PreAuthCode"]] = relationship(
-        back_populates="subject", cascade="all, delete-orphan", lazy="noload"
+        back_populates="subject", cascade="all, delete-orphan", lazy="selectin"
     )
     access_tokens: Mapped[list["AccessToken"]] = relationship(
-        back_populates="subject", cascade="all, delete-orphan", lazy="noload"
+        back_populates="subject", cascade="all, delete-orphan", lazy="selectin"
     )
     refresh_tokens: Mapped[list["RefreshToken"]] = relationship(
-        back_populates="subject", cascade="all, delete-orphan", lazy="noload"
+        back_populates="subject", cascade="all, delete-orphan", lazy="selectin"
+    )
+    dpop_jtis: Mapped[list["DpopJti"]] = relationship(
+        back_populates="subject", cascade="all, delete-orphan", lazy="selectin"
     )
 
 
@@ -55,9 +58,6 @@ class PreAuthCode(Base):
     )
     code: Mapped[str] = mapped_column(Text, nullable=False)
     tx_code: Mapped[str | None] = mapped_column("user_pin", Text, nullable=True)
-    tx_code_attempts: Mapped[int] = mapped_column(
-        "user_pin_attempts", Integer, nullable=False, default=0
-    )
     authorization_details: Mapped[list[dict[str, Any]] | None] = mapped_column(
         JSONB, nullable=True
     )
@@ -119,11 +119,18 @@ class RefreshToken(Base):
     )
 
 
-class JtiSeen(Base):
-    """JTI replay-prevention for private_key_jwt and attestation PoP."""
+class DpopJti(Base):
+    """DpopJti model."""
 
-    __tablename__ = "jti_seen"
-
-    jti: Mapped[str] = mapped_column(Text, primary_key=True)
+    __tablename__ = "dpop_jti"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    subject_id: Mapped[int] = mapped_column(
+        ForeignKey("subject.id", onupdate="CASCADE", ondelete="CASCADE"), nullable=False
+    )
+    jti: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    htm: Mapped[str | None] = mapped_column(Text, nullable=True)
+    htu: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cnf_jkt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    issued_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
-    jti_metadata: Mapped[dict | None] = mapped_column("metadata", JSONB, nullable=True)
+    subject: Mapped["Subject"] = relationship(back_populates="dpop_jtis", lazy="joined")

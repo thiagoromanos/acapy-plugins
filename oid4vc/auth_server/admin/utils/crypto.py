@@ -1,15 +1,23 @@
 """Crypto helpers (simple mode)."""
 
+import base64
 import os
 import secrets
 
-from joserfc.jwk import ECKey
+from authlib.jose import jwk
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from admin.config import settings
-from core.utils.encoding import b64url_decode, b64url_encode
+
+
+def _b64url_decode_padded(s: str) -> bytes:
+    return base64.urlsafe_b64decode(s + "===")
+
+
+def _b64url_encode_no_pad(b: bytes) -> str:
+    return base64.urlsafe_b64encode(b).decode("utf-8").rstrip("=")
 
 
 def _load_key(version: int = 1) -> bytes | None:
@@ -18,7 +26,7 @@ def _load_key(version: int = 1) -> bytes | None:
     if not secret:
         return None
     try:
-        return b64url_decode(secret)
+        return _b64url_decode_padded(secret)
     except Exception:
         return None
 
@@ -32,7 +40,7 @@ def _aead_encrypt(plaintext: str) -> str:
     aesgcm = AESGCM(key)
     nonce = os.urandom(12)
     ct = aesgcm.encrypt(nonce, plaintext.encode("utf-8"), None)
-    blob = b64url_encode(nonce + ct)
+    blob = _b64url_encode_no_pad(nonce + ct)
     # Always prefix with version, e.g., v1:... or v2:...
     return f"v{version}:{blob}"
 
@@ -41,9 +49,7 @@ def _aead_decrypt(blob: str) -> str:
     """AES-GCM decrypt with version prefix, assume v1 if missing."""
     version = 1
     b64_blob = blob
-    has_version_prefix = False
     if isinstance(blob, str) and blob.startswith("v") and ":" in blob[:6]:
-        has_version_prefix = True
         # Parse version prefix, e.g., v2:...
         vpart, b64_blob = blob.split(":", 1)
         try:
@@ -52,27 +58,19 @@ def _aead_decrypt(blob: str) -> str:
             version = 1
     key = _load_key(version)
     if not key:
-        if has_version_prefix:
-            raise ValueError("decryption key unavailable for version %d" % version)
-        # No version prefix and no key — treat as unencrypted plaintext
+        # fallback: if v1 and no key, return as plaintext
         return blob
     try:
-        raw = b64url_decode(b64_blob)
-    except Exception as exc:
-        if has_version_prefix:
-            raise ValueError("failed to decode encrypted blob") from exc
+        raw = _b64url_decode_padded(b64_blob)
+    except Exception:
         return blob
     if len(raw) < 12 + 16:
-        if has_version_prefix:
-            raise ValueError("encrypted blob too short")
         return blob
     nonce, ct_tag = raw[:12], raw[12:]
     aesgcm = AESGCM(key)
     try:
         return aesgcm.decrypt(nonce, ct_tag, None).decode("utf-8")
-    except Exception as exc:
-        if has_version_prefix:
-            raise ValueError("AEAD decryption failed") from exc
+    except Exception:
         return blob
 
 
@@ -105,7 +103,7 @@ def generate_es256_keypair(kid: str | None = None, encrypt: bool = True) -> dict
         encryption_algorithm=serialization.NoEncryption(),
     ).decode("utf-8")
 
-    public_jwk = ECKey.import_key(private_pem).as_dict(private=False)
+    public_jwk = jwk.dumps(private_pem, kty="EC", crv="P-256", is_private=False)
     _kid = kid or f"as-{secrets.token_hex(4)}"
     public_jwk["kid"] = _kid
     public_jwk["alg"] = "ES256"
@@ -118,4 +116,5 @@ def generate_es256_keypair(kid: str | None = None, encrypt: bool = True) -> dict
         "alg": "ES256",
         "public_jwk": public_jwk,
         "private_pem_enc": private_pem_enc,
+        "private_pem": private_pem,
     }
