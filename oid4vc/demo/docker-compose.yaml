@@ -45,7 +45,6 @@ services:
         --wallet-name issuer
         --wallet-key insecure
         --auto-provision
-        --log-level DEBUG
         --debug-webhooks
         --plugin oid4vc
         --plugin jwt_vc_json
@@ -54,7 +53,7 @@ services:
         --plugin status_list.v1_0
         --multitenant
         --multitenant-admin
-        --jwt-secret insecure
+        --jwt-secret insecure001234456789012345678900
         --log-level INFO
         --multitenancy-config wallet_type=single-wallet-askar key_derivation_method=RAW
         --block-plugin acapy_agent.anoncreds

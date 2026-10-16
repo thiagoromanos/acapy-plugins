@@ -202,7 +202,6 @@ async def update_supported_credential_jwt_vc(request: web.Request):
     try:
         async with context.session() as session:
             record = await SupportedCredential.retrieve_by_id(session, supported_cred_id)
-            assert isinstance(session, AskarProfileSession)
             record = await jwt_supported_cred_update_helper(record, body, session)
     except StorageNotFoundError as err:
         raise web.HTTPNotFound(reason=err.roll_up) from err

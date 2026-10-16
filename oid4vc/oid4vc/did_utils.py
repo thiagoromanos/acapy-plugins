@@ -2,7 +2,6 @@
 
 import json
 
-from acapy_agent.askar.profile import AskarProfileSession
 from acapy_agent.core.profile import ProfileSession
 from acapy_agent.storage.base import BaseStorage, StorageRecord
 from acapy_agent.storage.error import StorageNotFoundError
@@ -40,9 +39,6 @@ async def _create_default_did(session: ProfileSession) -> DIDInfo:
     the resulting DID is stored exactly the same way and can be resolved
     by jwt_sign / key_material_for_kid.
     """
-    assert isinstance(session, AskarProfileSession), (
-        "did_utils requires an Askar-backed profile session"
-    )
 
     wallet = session.inject(BaseWallet)
     storage = session.inject(BaseStorage)
