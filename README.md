@@ -156,6 +156,10 @@ Once the PR is merged, a "Release PR" GitHub Action will run to update the
 `plugin_globals` directory with the new plugin versions and create a new release
 tag for the repo.
 
+About LTS Releases of ACA-Py and Plugins.  We don't generally do a Plugins release for ACA-Py LTS Releases. It's rarely necessary, as the tagged branch dependencies remain. If there was more activity with plugins in the future it could be useful. If there was something critical needed a manual release could be done with a branch vs. a tag, but there is no automated processes for it.
+
+A patch release for the plugins is possible if there is a need to fix something between ACA-Py releases. For instance [https://github.com/openwallet-foundation/acapy-plugins/releases#release-1.3.2.1](https://github.com/openwallet-foundation/acapy-plugins/releases#release-1.3.2.1) was a patch release of the plugins.
+
 ## Lite plugins
 
 Sometimes is desirable to have a plugin that doesn't need integration tests or
@@ -238,9 +242,25 @@ Or against a subset of plugins:
 ./test_acapy_version.py 1.7.0rc0 basicmessage_storage webvh
 ```
 
+To test an LTS release, use `--tag` with the closest prior tag for that line
+(so the plugin set and code match what actually shipped there) instead of
+testing against the current checkout:
+
+```
+./test_acapy_version.py 1.3.6rc0 --tag 1.3.2
+```
+
 The script requires `poetry` and `docker` (with the `compose` plugin) and
 should be run from the repo root. It prints a pass/fail/skip summary for each
-plugin when it finishes.
+plugin when it finishes; full output for any failure (poetry lock, docker
+build, or integration test) is written to `.test-acapy-version.log` in the
+repo root instead of the terminal.
+
+Note: the script has some built-in handling for `poetry lock` failures on
+older `--tag` runs (relaxing native binding pins like `aries-askar` that may
+be stale relative to the target acapy-agent version). See
+`relax_native_binding_pins` in the script if a lock failure needs digging
+into.
 
 ## Deploy
 
